@@ -4,9 +4,18 @@ import socket
 import traceback
 from threading import Thread
 from urllib.parse import urlencode, urljoin, urlparse
+import importlib.resources as resources
+from contextlib import contextmanager
 import json
 import asyncio
 import time
+
+
+@contextmanager
+def get_resource_path(package: str, resource: str):
+    resource_path = resources.path(package, resource)
+    with resource_path as p:
+        yield p
 
 
 class Request:
@@ -75,11 +84,10 @@ class TurboClient:
             pipeline=True,
             max_retries_per_request=5,
             engine=Engine.HTTP2,
-            jar="./turbo_intruder_1.4.2/turbo.jar",
             http2=False,
             debug=False
     ):
-        print('Warming TurboClient...')
+        print('Warming TurboClient (25s)...')
         self.headers = {
             'host': urlparse(url).netloc,
             'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36',
@@ -88,8 +96,10 @@ class TurboClient:
         if headers:
             self.headers.update(headers)
 
+        with get_resource_path('turbo_http', 'turbo_intruder') as file_path:
+            self.turbo_intruder = file_path
+
         self.url = url
-        self.jar = jar
         self.concurrent_connections = concurrent_connections
         self.requests_per_connection = requests_per_connection
         self.pipeline = pipeline
@@ -118,9 +128,9 @@ class TurboClient:
         java_home = os.environ.get("JAVA_HOME")
         self.java = f'{java_home}/bin/java.exe' if java_home else 'java'
         try:
-            subprocess.Popen([self.java, "-version"])
+            subprocess.Popen([self.java, "-version"], stderr=subprocess.PIPE)
         except FileNotFoundError:
-            raise (Exception("Java executable not found"))
+            raise (Exception("Java executable not found. Install or update %JAVA_HOME%."))
 
     def _spawn(self):
         env = os.environ.copy()
@@ -131,7 +141,8 @@ class TurboClient:
             'maxRetriesPerRequest': self.max_retries_per_request,
             'engine': self.engine
         })
-        cmd = [self.java, '-jar', self.jar, './turbo_request.py', f'request.txt', self.url, f'{self.port}']
+        cmd = [self.java, '-jar', f'{self.turbo_intruder}/turbo.jar',
+               f'{self.turbo_intruder}/request.py', f'{self.turbo_intruder}/request.txt', self.url, f'{self.port}']
         return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
 
     async def _receive_len(self, n):

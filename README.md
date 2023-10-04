@@ -1,8 +1,8 @@
-# Turbo Requests
+# Turbo HTTP
 Python requests-like wrapper for PortSwigger's Turbo Intruder. Request client for sending large amounts of HTTP requests quickly.
 
 ## Installation
-Download and install the latest released version from [PyPI](https://pypi.python.org/pypi/):
+Download and install the latest released version from [PyPI](https://pypi.org/project/turbo-http/):
 
 ```bash
 pip install turbo-http

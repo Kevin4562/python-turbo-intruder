@@ -18,7 +18,7 @@ setup(
     author=about["__author__"],
     url=about["__url__"],
     packages=["turbo_http"],
-    package_data={"": ["LICENSE", "NOTICE"]},
+    package_data={"turbo_http": ["turbo_intruder/*"]},
     include_package_data=True,
     python_requires=">=3.7",
     install_requires=[],
