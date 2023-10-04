@@ -3,7 +3,7 @@ from setuptools import setup
 
 about = {}
 here = os.path.abspath(os.path.dirname(__file__))
-with open(os.path.join(here, "turbo_requests", "__version__.py"), "r", encoding="utf-8") as f:
+with open(os.path.join(here, "turbo_http", "__version__.py"), "r", encoding="utf-8") as f:
     exec(f.read(), about)
 
 with open("README.md", "r", encoding="utf-8") as f:
@@ -17,9 +17,8 @@ setup(
     long_description_content_type="text/markdown",
     author=about["__author__"],
     url=about["__url__"],
-    packages=["requests"],
+    packages=["turbo_http"],
     package_data={"": ["LICENSE", "NOTICE"]},
-    package_dir={"": "turbo_requests"},
     include_package_data=True,
     python_requires=">=3.7",
     install_requires=[],

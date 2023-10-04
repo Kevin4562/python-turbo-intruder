@@ -1,4 +1,4 @@
-__title__ = "turbo-requests"
+__title__ = "turbo-http"
 __description__ = "Turbo Intruder wrapper for Python"
 __url__ = "https://github.com/Kevin4562/python-turbo-intruder"
 __version__ = "0.0.1"
