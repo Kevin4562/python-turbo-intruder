@@ -1,14 +1,16 @@
 import os
 import subprocess
 import socket
-import traceback
 from threading import Thread
 from urllib.parse import urlencode, urljoin, urlparse
 import importlib.resources as resources
 from contextlib import contextmanager
 import json
 import asyncio
-import time
+from typing import Optional, Dict
+from concurrent.futures import Future
+import traceback
+from base64 import b64decode
 
 
 @contextmanager
@@ -19,7 +21,16 @@ def get_resource_path(package: str, resource: str):
 
 
 class Request:
-    def __init__(self, future, method, endpoint, params=None, headers=None, body=None, http2=False):
+    def __init__(
+            self,
+            future: Future,
+            method: str,
+            endpoint: str,
+            params: Optional[dict] = None,
+            headers: Optional[dict] = None,
+            body: Optional[dict] = None,
+            http2=False
+    ):
         self._future = future
         self.method = method
         self.endpoint = endpoint
@@ -41,7 +52,15 @@ class Request:
 
 
 class Response:
-    def __init__(self, _id, domain, raw, request, elapsed, status_code):
+    def __init__(
+            self,
+            _id: int,
+            domain: str,
+            raw: list,
+            request: Request,
+            elapsed: int,
+            status_code: int,
+    ):
         self.id = _id
         self.url = urljoin(domain, request.endpoint)
         self.elapsed = elapsed
@@ -49,15 +68,19 @@ class Response:
 
         self.headers, self.content = self._parse_raw(raw)
 
+    @property
+    def text(self, encoding: str = 'utf-8', errors: str = 'ignore'):
+        return self.content.decode(encoding, errors=errors)
+
     def json(self):
         return json.loads(self.content)
 
     def _parse_raw(self, raw):
-        decoded = bytes(raw).decode('utf-8')
-        header_part, content = decoded.split('\r\n\r\n', 1)
-        start_line, headers = header_part.split('\r\n', 1)
+        decoded = b64decode(raw)
+        header_part, content = decoded.split(b'\r\n\r\n', 1)
+        start_line, headers = header_part.split(b'\r\n', 1)
         header_dict = {}
-        for header in headers.split('\r\n'):
+        for header in headers.decode('utf-8', errors='ignore').split('\r\n'):
             key, value = header.split(': ', 1)
             header_dict[key] = value
         return header_dict, content
@@ -77,15 +100,15 @@ class TurboClient:
 
     def __init__(
             self,
-            url,
-            headers=None,
-            concurrent_connections=100,
-            requests_per_connection=1000,
-            pipeline=True,
-            max_retries_per_request=5,
-            engine=Engine.HTTP2,
-            http2=False,
-            debug=False
+            url: str,
+            headers: Optional[dict] = None,
+            concurrent_connections: int = 100,
+            requests_per_connection: int = 1000,
+            pipeline: bool = True,
+            max_retries_per_request: int = 5,
+            engine: Engine = Engine.HTTP2,
+            http2: bool = False,
+            debug: bool = False
     ):
         print('Warming TurboClient (25s)...')
         self.headers = {
@@ -107,17 +130,25 @@ class TurboClient:
         self.engine = engine
         self.http2 = http2
 
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self._initialize_socket(s)
+        self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._initialize_socket(self.socket)
 
         self._find_java()
         self.process = self._spawn()
         if debug:
             self._observe()
 
-        self.connection, _ = s.accept()
+        self.connection, _ = self.socket.accept()
         self.loop = asyncio.get_event_loop()
-        self.monitor_task = self.loop.create_task(self._monitor_socket())
+        self.monitor_task = self.loop.create_task(self._receive_socket())
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.socket.close()
+        self.process.kill()
+        self.loop.close()
 
     def _initialize_socket(self, s):
         s.bind(("localhost", 0))
@@ -154,7 +185,7 @@ class TurboClient:
             data += packet
         return data
 
-    async def _monitor_socket(self):
+    async def _receive_socket(self):
         while True:
             length = await self.loop.sock_recv(self.connection, 4)
             data = await self._receive_len(int.from_bytes(length, 'big'))
@@ -178,7 +209,14 @@ class TurboClient:
         observation.daemon = True
         observation.start()
 
-    def request(self, method, endpoint, params=None, headers=None, data=None):
+    def request(
+            self,
+            method: str,
+            endpoint: str,
+            params: Optional[dict] = None,
+            headers: Optional[dict] = None,
+            data: Optional[dict] = None
+    ):
         request_headers = self.headers.copy()
         if headers:
             request_headers.update(headers)
@@ -197,20 +235,52 @@ class TurboClient:
         self.connection.sendall(request._payload())
         return future
 
-    def get(self, endpoint, params=None, headers=None):
+    def get(
+            self,
+            endpoint: str,
+            params: Optional[dict] = None,
+            headers: Optional[dict] = None
+    ):
         return self.request('GET', endpoint, params, headers)
 
-    def post(self, endpoint, params=None, headers=None, data=None):
+    def post(
+            self,
+            endpoint: str,
+            params: Optional[dict] = None,
+            headers: Optional[dict] = None,
+            data: Optional[dict] = None
+    ):
         return self.request('POST', endpoint, params, headers, data)
 
-    def put(self, endpoint, params=None, headers=None, data=None):
+    def put(
+            self,
+            endpoint: str,
+            params: Optional[dict] = None,
+            headers: Optional[dict] = None,
+            data: Optional[dict] = None
+    ):
         return self.request('PUT', endpoint, params, headers, data)
 
-    def delete(self, endpoint, params=None, headers=None):
+    def delete(
+            self,
+            endpoint: str,
+            params: Optional[dict] = None,
+            headers: Optional[dict] = None,
+    ):
         return self.request('DELETE', endpoint, params, headers)
 
-    def patch(self, endpoint, params=None, headers=None):
+    def patch(
+            self,
+            endpoint: str,
+            params: Optional[dict] = None,
+            headers: Optional[dict] = None,
+    ):
         return self.request('PATCH', endpoint, params, headers)
 
-    def head(self, endpoint, params=None, headers=None):
+    def head(
+            self,
+            endpoint: str,
+            params: Optional[dict] = None,
+            headers: Optional[dict] = None,
+    ):
         return self.request('HEAD', endpoint, params, headers)

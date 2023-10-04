@@ -3,6 +3,7 @@ import os
 import time
 import socket
 import struct
+from base64 import b64encode
 
 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
@@ -57,6 +58,6 @@ def handleResponse(req, interesting):
         'status': req.status,
         'id': req.id,
         'time': req.time,
-        'response': list(req.responseAsBytes),
+        'response': b64encode(req.responseAsBytes),
     }).encode('utf-8')
     s.sendall(struct.pack('>I', len(data)) + data)
