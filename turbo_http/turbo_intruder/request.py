@@ -11,8 +11,8 @@ s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 def raw_http(data):
     req = ' '.join([data['method'], data['endpoint'], data['version']])
     for header, value in data['headers'].items():
-        req += '\n' + ': '.join([header, value])
-    req += '\n\n'
+        req += os.linesep + ': '.join([header.title(), value])
+    req += os.linesep*2
     if data['body']:
         req += data['body']
     return req
@@ -46,7 +46,8 @@ def queueRequests(target, wordlists):
     while True:
         length = struct.unpack('>I', s.recv(4))[0]
         request_json = json.loads(receive_len(length))
-        engine.queue(raw_http(request_json), label=request_json['label'])
+        raw_request = raw_http(request_json)
+        engine.queue(raw_request, label=request_json['label'])
 
 
 def handleResponse(req, interesting):

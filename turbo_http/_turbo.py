@@ -5,12 +5,13 @@ from threading import Thread
 from urllib.parse import urlencode, urljoin, urlparse
 import importlib.resources as resources
 from contextlib import contextmanager
-import json
+import json as json_lib
 import asyncio
 from typing import Optional, Dict
 from concurrent.futures import Future
 import traceback
 from base64 import b64decode
+import urllib.parse
 
 
 @contextmanager
@@ -40,7 +41,7 @@ class Request:
         self.http2 = http2
 
     def _payload(self):
-        data = json.dumps({
+        data = json_lib.dumps({
             'label': str(id(self._future)),
             'version': 'HTTP/1.1' if not self.http2 else 'HTTP/2',
             'method': self.method,
@@ -73,14 +74,14 @@ class Response:
         return self.content.decode(encoding, errors=errors)
 
     def json(self):
-        return json.loads(self.content)
+        return json_lib.loads(self.content)
 
     def _parse_raw(self, raw):
         decoded = b64decode(raw)
-        header_part, content = decoded.split(b'\r\n\r\n', 1)
-        start_line, headers = header_part.split(b'\r\n', 1)
+        header_part, content = decoded.split((os.linesep*2).encode(), 1)
+        start_line, headers = header_part.split(os.linesep.encode(), 1)
         header_dict = {}
-        for header in headers.decode('utf-8', errors='ignore').split('\r\n'):
+        for header in headers.decode('utf-8', errors='ignore').split(os.linesep):
             key, value = header.split(': ', 1)
             header_dict[key] = value
         return header_dict, content
@@ -106,7 +107,7 @@ class TurboClient:
             requests_per_connection: int = 1000,
             pipeline: bool = True,
             max_retries_per_request: int = 5,
-            engine: Engine = Engine.HTTP2,
+            engine: Engine = Engine.THREADED,
             http2: bool = False,
             debug: bool = False
     ):
@@ -114,7 +115,6 @@ class TurboClient:
         self.headers = {
             'host': urlparse(url).netloc,
             'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36',
-            'Connection': 'keep-alive'
         }
         if headers:
             self.headers.update(headers)
@@ -148,12 +148,11 @@ class TurboClient:
     def __exit__(self, exc_type, exc_value, traceback):
         self.socket.close()
         self.process.kill()
-        self.loop.close()
 
     def _initialize_socket(self, s):
         s.bind(("localhost", 0))
         self.port = s.getsockname()[1]
-        s.listen(5)
+        s.listen(1)
 
     def _find_java(self):
         java_home = os.environ.get("JAVA_HOME")
@@ -165,7 +164,7 @@ class TurboClient:
 
     def _spawn(self):
         env = os.environ.copy()
-        env['turbo_request_conf'] = json.dumps({
+        env['turbo_request_conf'] = json_lib.dumps({
             'concurrentConnections': self.concurrent_connections,
             'requestsPerConnection': self.requests_per_connection,
             'pipeline': self.pipeline,
@@ -189,7 +188,7 @@ class TurboClient:
         while True:
             length = await self.loop.sock_recv(self.connection, 4)
             data = await self._receive_len(int.from_bytes(length, 'big'))
-            response = json.loads(data)
+            response = json_lib.loads(data)
             request = self.futures.pop(response.get('label'))
             request._future.set_result(Response(
                 _id=response.get('id'),
@@ -203,7 +202,7 @@ class TurboClient:
     def _observe(self):
         def debug():
             for msg in iter(lambda: self.process.stdout.readline(), b""):
-                print(msg.decode('utf-8'))
+                print(msg.decode('utf-8'), end='')
 
         observation = Thread(target=debug)
         observation.daemon = True
@@ -215,11 +214,20 @@ class TurboClient:
             endpoint: str,
             params: Optional[dict] = None,
             headers: Optional[dict] = None,
-            data: Optional[dict] = None
+            data: str = None,
+            json: Optional[dict] = None,
     ):
         request_headers = self.headers.copy()
         if headers:
             request_headers.update(headers)
+
+        if json and data:
+            raise ValueError('Cannot use both json and data parameters')
+
+        if json:
+            data = json_lib.dumps(json)
+            request_headers['Content-Type'] = 'application/json'
+            request_headers['Content-Length'] = str(len(data))
 
         future = self.loop.create_future()
         request = Request(
@@ -248,18 +256,20 @@ class TurboClient:
             endpoint: str,
             params: Optional[dict] = None,
             headers: Optional[dict] = None,
-            data: Optional[dict] = None
+            data: str = None,
+            json: Optional[dict] = None,
     ):
-        return self.request('POST', endpoint, params, headers, data)
+        return self.request('POST', endpoint, params, headers, data, json)
 
     def put(
             self,
             endpoint: str,
             params: Optional[dict] = None,
             headers: Optional[dict] = None,
-            data: Optional[dict] = None
+            data: str = None,
+            json: Optional[dict] = None
     ):
-        return self.request('PUT', endpoint, params, headers, data)
+        return self.request('PUT', endpoint, params, headers, data, json)
 
     def delete(
             self,
