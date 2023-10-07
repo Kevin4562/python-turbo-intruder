@@ -51,6 +51,9 @@ class Request:
         }).encode('utf-8')
         return len(data).to_bytes(4, 'big') + data
 
+    def __repr__(self):
+        return f"<Request [{self.method}]>"
+
 
 class Response:
     def __init__(
@@ -66,8 +69,15 @@ class Response:
         self.url = urljoin(domain, request.endpoint)
         self.elapsed = elapsed
         self.status_code = status_code
+        self.request = request
 
         self.headers, self.content = self._parse_raw(raw)
+
+    def __repr__(self):
+        return f"<Response [{self.status_code}]>"
+
+    def __bool__(self):
+        return True if self.status_code < 400 else False
 
     @property
     def text(self, encoding: str = 'utf-8', errors: str = 'ignore'):
@@ -103,40 +113,43 @@ class TurboClient:
             self,
             url: str,
             headers: Optional[dict] = None,
-            concurrent_connections: int = 100,
-            requests_per_connection: int = 1000,
+            concurrent_connections: int = 5,
+            requests_per_connection: int = 100,
+            timeout: int = 10,
             pipeline: bool = True,
             max_retries_per_request: int = 5,
             engine: Engine = Engine.THREADED,
             http2: bool = False,
             debug: bool = False
     ):
-        print('Warming TurboClient (25s)...')
         self.headers = {
-            'host': urlparse(url).netloc,
-            'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36',
+            'Host': urlparse(url).netloc,
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36',
         }
         if headers:
-            self.headers.update(headers)
+            self.headers.update(self._normalize_headers(headers))
 
         with get_resource_path('turbo_http', 'turbo_intruder') as file_path:
             self.turbo_intruder = file_path
 
-        self.url = url
         self.concurrent_connections = concurrent_connections
         self.requests_per_connection = requests_per_connection
         self.pipeline = pipeline
         self.max_retries_per_request = max_retries_per_request
+        self.timeout = timeout
         self.engine = engine
         self.http2 = http2
 
+        self.url = self._validate_url(url)
+
+        print(f'Establishing {self.concurrent_connections} connection to {self.url} ...')
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._initialize_socket(self.socket)
 
         self._find_java()
         self.process = self._spawn()
-        if debug:
-            self._observe()
+
+        self._observe(debug)
 
         self.connection, _ = self.socket.accept()
         self.loop = asyncio.get_event_loop()
@@ -148,6 +161,17 @@ class TurboClient:
     def __exit__(self, exc_type, exc_value, traceback):
         self.socket.close()
         self.process.kill()
+
+    def _validate_url(self, url):
+        parsed_url = urlparse(url)
+        if parsed_url.scheme not in ['http', 'https']:
+            raise ValueError(f'Invalid URL "{url}": No scheme supplied. Must be http or https.')
+
+        if parsed_url.scheme == 'http' and self.engine == Engine.HTTP2:
+            self.__exit__(None, None, None)
+            raise ValueError(f'Invalid URL "{url}": HTTP2 Engine is only supported over https scheme.')
+
+        return f'{parsed_url.scheme}://{parsed_url.netloc}'
 
     def _initialize_socket(self, s):
         s.bind(("localhost", 0))
@@ -169,6 +193,7 @@ class TurboClient:
             'requestsPerConnection': self.requests_per_connection,
             'pipeline': self.pipeline,
             'maxRetriesPerRequest': self.max_retries_per_request,
+            'timeout': self.timeout,
             'engine': self.engine
         })
         cmd = [self.java, '-jar', f'{self.turbo_intruder}/turbo.jar',
@@ -199,14 +224,21 @@ class TurboClient:
                 status_code=response.get('status')
             ))
 
-    def _observe(self):
+    def _observe(self, debug_enabled):
         def debug():
             for msg in iter(lambda: self.process.stdout.readline(), b""):
-                print(msg.decode('utf-8'), end='')
+                if 'java.net.UnknownHostException' in msg.decode('utf-8'):
+                    raise Exception(f'Unknown host: {self.url}')
+
+                if debug_enabled:
+                    print(msg.decode('utf-8'), end='')
 
         observation = Thread(target=debug)
         observation.daemon = True
         observation.start()
+
+    def _normalize_headers(self, headers):
+        return {k.title(): v for k, v in headers.items()}
 
     def request(
             self,
@@ -219,7 +251,7 @@ class TurboClient:
     ):
         request_headers = self.headers.copy()
         if headers:
-            request_headers.update(headers)
+            request_headers.update(self._normalize_headers(headers))
 
         if json and data:
             raise ValueError('Cannot use both json and data parameters')

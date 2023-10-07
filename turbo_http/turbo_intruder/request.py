@@ -1,9 +1,11 @@
+import base64
 import json
 import os
 import time
 import socket
 import struct
-from base64 import b64encode
+from base64 import b64encode, b64decode
+import traceback
 
 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
@@ -21,10 +23,7 @@ def raw_http(data):
 def receive_len(n):
     data = b''
     while len(data) < n:
-        packet = s.recv(n - len(data))
-        if not packet:
-            return None
-        data += packet
+        data += s.recv(n - len(data))
     return data
 
 
@@ -36,7 +35,8 @@ def queueRequests(target, wordlists):
         requestsPerConnection=conf['requestsPerConnection'],
         pipeline=conf['pipeline'],
         maxRetriesPerRequest=conf['maxRetriesPerRequest'],
-        engine=conf['engine']
+        timeout=conf['timeout'],
+        engine=conf['engine'],
     )
 
     engine.queue(
@@ -44,7 +44,7 @@ def queueRequests(target, wordlists):
     s.connect(("localhost", int(target.baseInput)))
 
     while True:
-        length = struct.unpack('>I', s.recv(4))[0]
+        length = struct.unpack('>I', receive_len(4))[0]
         request_json = json.loads(receive_len(length))
         raw_request = raw_http(request_json)
         engine.queue(raw_request, label=request_json['label'])
