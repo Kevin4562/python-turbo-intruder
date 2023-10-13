@@ -12,6 +12,7 @@ from concurrent.futures import Future
 import traceback
 from base64 import b64decode
 import urllib.parse
+from http.cookies import SimpleCookie
 
 
 @contextmanager
@@ -72,6 +73,7 @@ class Response:
         self.request = request
 
         self.headers, self.content = self._parse_raw(raw)
+        self.cookies = self._parse_cookies(self.headers)
 
     def __repr__(self):
         return f"<Response [{self.status_code}]>"
@@ -79,12 +81,31 @@ class Response:
     def __bool__(self):
         return True if self.status_code < 400 else False
 
-    @property
     def text(self, encoding: str = 'utf-8', errors: str = 'ignore'):
         return self.content.decode(encoding, errors=errors)
 
     def json(self):
         return json_lib.loads(self.content)
+
+    def iter_lines(
+        self, encoding: str = 'utf-8', delimiter: str = os.linesep
+    ):
+        return self.text(encoding=encoding).split(delimiter)
+
+    def _parse_cookies(self, headers: Dict[str, str]) -> Dict[str, str]:
+        cookies = {}
+        cookie_string = headers.get('Set-Cookie', '')
+        if not cookie_string:
+            return cookies
+
+        # Parse the cookie string
+        cookie_jar = SimpleCookie(cookie_string)
+
+        # Extract the key-value pairs from the parsed cookie data
+        for key, morsel in cookie_jar.items():
+            cookies[key] = morsel.value
+
+        return cookies
 
     def _parse_raw(self, raw):
         decoded = b64decode(raw)
@@ -246,12 +267,16 @@ class TurboClient:
             endpoint: str,
             params: Optional[dict] = None,
             headers: Optional[dict] = None,
-            data: str = None,
+            data=None,
             json: Optional[dict] = None,
+            cookies: Optional[dict] = None,
     ):
         request_headers = self.headers.copy()
         if headers:
             request_headers.update(self._normalize_headers(headers))
+
+        if cookies:
+            request_headers['Cookie'] = '; '.join([f'{k}={v}' for k, v in cookies.items()])
 
         if json and data:
             raise ValueError('Cannot use both json and data parameters')
@@ -259,6 +284,11 @@ class TurboClient:
         if json:
             data = json_lib.dumps(json)
             request_headers['Content-Type'] = 'application/json'
+            request_headers['Content-Length'] = str(len(data))
+
+        if data and isinstance(data, dict):
+            data = urlencode(data)
+            request_headers['Content-Type'] = 'application/x-www-form-urlencoded'
             request_headers['Content-Length'] = str(len(data))
 
         future = self.loop.create_future()
@@ -279,50 +309,96 @@ class TurboClient:
             self,
             endpoint: str,
             params: Optional[dict] = None,
-            headers: Optional[dict] = None
+            headers: Optional[dict] = None,
+            cookies: Optional[dict] = None,
     ):
-        return self.request('GET', endpoint, params, headers)
+        return self.request(
+            'GET',
+            endpoint=endpoint,
+            params=params,
+            headers=headers,
+            cookies=cookies
+        )
 
     def post(
             self,
             endpoint: str,
             params: Optional[dict] = None,
             headers: Optional[dict] = None,
-            data: str = None,
+            data=None,
             json: Optional[dict] = None,
+            cookies: Optional[dict] = None,
     ):
-        return self.request('POST', endpoint, params, headers, data, json)
+        return self.request(
+            'POST',
+            endpoint=endpoint,
+            params=params,
+            headers=headers,
+            data=data,
+            json=json,
+            cookies=cookies
+        )
 
     def put(
             self,
             endpoint: str,
             params: Optional[dict] = None,
             headers: Optional[dict] = None,
-            data: str = None,
-            json: Optional[dict] = None
+            data=None,
+            json: Optional[dict] = None,
+            cookies: Optional[dict] = None,
     ):
-        return self.request('PUT', endpoint, params, headers, data, json)
+        return self.request(
+            'PUT',
+            endpoint=endpoint,
+            params=params,
+            headers=headers,
+            data=data,
+            json=json,
+            cookies=cookies
+        )
 
     def delete(
             self,
             endpoint: str,
             params: Optional[dict] = None,
             headers: Optional[dict] = None,
+            cookies: Optional[dict] = None,
     ):
-        return self.request('DELETE', endpoint, params, headers)
+        return self.request(
+            'DELETE',
+            endpoint=endpoint,
+            params=params,
+            headers=headers,
+            cookies=cookies
+        )
 
     def patch(
             self,
             endpoint: str,
             params: Optional[dict] = None,
             headers: Optional[dict] = None,
+            cookies: Optional[dict] = None,
     ):
-        return self.request('PATCH', endpoint, params, headers)
+        return self.request(
+            'PATCH',
+            endpoint=endpoint,
+            params=params,
+            headers=headers,
+            cookies=cookies
+        )
 
     def head(
             self,
             endpoint: str,
             params: Optional[dict] = None,
             headers: Optional[dict] = None,
+            cookies: Optional[dict] = None,
     ):
-        return self.request('HEAD', endpoint, params, headers)
+        return self.request(
+            'HEAD',
+            endpoint=endpoint,
+            params=params,
+            headers=headers,
+            cookies=cookies
+        )
